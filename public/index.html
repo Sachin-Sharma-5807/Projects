@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Group Chat</title>
+  <style>
+    /* Your original styles unchanged */
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      background: #ece5dd;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 20px;
+    }
+
+    #loginArea, #chatArea {
+      background: #ffffff;
+      padding: 20px;
+      border-radius: 15px;
+      box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+      width: 100%;
+      max-width: 600px;
+    }
+
+    h2 {
+      margin-top: 0;
+      color: #075e54;
+    }
+
+    input, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 5px;
+      border: 1px solid #ccc;
+      border-radius: 10px;
+      box-sizing: border-box;
+    }
+
+    button {
+      background-color: #25d366;
+      color: white;
+      font-weight: bold;
+      border: none;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+
+    button:hover {
+      background-color: #1ebd5a;
+    }
+
+    #messages {
+      border: none;
+      height: 500px;
+      overflow-y: auto;
+      padding: 10px;
+      background: #f0f0f0;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .message {
+      background: #dcf8c6;
+      border-radius: 10px;
+      padding: 8px 12px;
+      margin: 10px 0;
+      max-width: 80%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      position: relative;
+      clear: both;
+    }
+
+    .message.self {
+      background: #ffffff;
+      margin-left: auto;
+    }
+
+    .meta {
+      font-size: 0.75em;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    #usersList {
+      list-style-type: none;
+      padding-left: 0;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    #usersList li {
+      padding: 4px 0;
+      border-bottom: 1px solid #ddd;
+    }
+
+    form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    #msgInput {
+      flex: 1;
+      border-radius: 20px;
+      border: 1px solid #ccc;
+      padding-left: 15px;
+    }
+
+    #fileInput {
+      flex-basis: 100%;
+    }
+
+    video, img {
+      max-width: 100%;
+      border-radius: 10px;
+      margin-top: 5px;
+    }
+
+    .topBar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: #075e54;
+      color: white;
+      padding: 10px 15px;
+      border-radius: 10px;
+      margin-bottom: 15px;
+    }
+
+    .groupLabel {
+      font-weight: bold;
+      font-size: 1.1em;
+    }
+
+    @media (max-width: 600px) {
+      #loginArea, #chatArea {
+        width: 95%;
+        padding: 15px;
+      }
+
+      .message {
+        max-width: 100%;
+      }
+
+      #messages {
+        height: 350px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="loginArea">
+    <h2>Group Chat</h2>
+    <input id="username" placeholder="Username" /><br/><br/>
+    <input id="password" type="password" placeholder="Password" /><br/><br/>
+    <button onclick="login()">Login</button>
+  </div>
+
+  <div id="chatArea" style="display: none;">
+    <div class="topBar">
+      <div class="groupLabel" id="groupLabel">Group Chat</div>
+      <div>
+        Logged in as <span id="currentUser"></span>
+        <button onclick="logout()">Logout</button>
+      </div>
+    </div>
+
+    <div>
+      Group ID: <input id="groupId" type="number" min="1" />
+      <button onclick="joinGroup()">Join Group</button>
+    </div>
+    <br/>
+
+    <div>
+      <strong>Online Users:</strong>
+      <ul id="usersList"></ul>
+    </div>
+
+    <div id="messages"></div>
+
+    <form id="msgForm">
+      <input id="msgInput" placeholder="Type a message..." autocomplete="off" />
+      <input type="file" id="fileInput" />
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    let socket;
+    let currentUserId = null;
+    let currentUsername = '';
+    let currentGroupId = null;
+
+    const serverBaseUrl = window.location.origin;
+
+    async function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+
+      if (!username || !password) {
+        alert('Please enter username and password');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.userId && data.username) {
+          currentUserId = data.userId;
+          currentUsername = data.username;
+          document.getElementById('currentUser').innerText = currentUsername;
+          document.getElementById('loginArea').style.display = 'none';
+          document.getElementById('chatArea').style.display = 'block';
+          initSocket();
+        } else {
+          alert(data.error || data.message || 'Login failed');
+        }
+      } catch (error) {
+        alert('Network error or invalid server response');
+        console.error(error);
+      }
+    }
+
+    function logout() {
+      fetch('/api/auth/logout').then(() => location.reload());
+    }
+
+    function initSocket() {
+      socket = io();
+
+      // Register user on socket server with userId & username
+      socket.emit('register', { userId: currentUserId, username: currentUsername });
+
+      // Update online users list with displayName if available
+      socket.on('updateUsers', (users) => {
+        const ul = document.getElementById('usersList');
+        ul.innerHTML = '';
+        users.forEach(user => {
+          // Use displayName if provided, fallback to username
+          const nameToShow = user.displayName || user.username || 'User';
+          const li = document.createElement('li');
+          li.textContent = nameToShow + (user.userId === currentUserId ? ' (You)' : '');
+          ul.appendChild(li);
+        });
+      });
+
+      // Load previous messages for current group
+      socket.on('previousMessages', (msgs) => {
+        const container = document.getElementById('messages');
+        container.innerHTML = '';
+        if (msgs.length === 0) {
+          alert('No messages found for this group.');
+        }
+        msgs.forEach(addMessage);
+      });
+
+      // Add new incoming message to chat
+      socket.on('newMessage', (msg) => {
+        addMessage(msg);
+      });
+    }
+
+    async function joinGroup() {
+      const groupIdInput = document.getElementById('groupId').value.trim();
+      if (!groupIdInput) {
+        alert('Please enter a group ID');
+        return;
+      }
+
+      const groupIdNum = Number(groupIdInput);
+      if (isNaN(groupIdNum) || groupIdNum < 1) {
+        alert('Invalid group ID');
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/${groupIdNum}`);
+        if (!res.ok) {
+          alert(`Group ID ${groupIdNum} does not exist.`);
+          return;
+        }
+
+        currentGroupId = groupIdNum;
+        socket.emit('joinGroup', groupIdNum);
+        document.getElementById('messages').innerHTML = '';
+        document.getElementById('groupLabel').innerText = `Group ID: ${groupIdNum}`;
+      } catch (err) {
+        alert('Error checking group. Please try again.');
+        console.error(err);
+      }
+    }
+
+    document.getElementById('msgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const text = document.getElementById('msgInput').value.trim();
+      const file = document.getElementById('fileInput').files[0];
+
+      if (!currentGroupId) {
+        alert('Join a group first');
+        return;
+      }
+
+      if (file) {
+        const formData = new FormData();
+        formData.append('media', file);
+        formData.append('text', text);
+        formData.append('userId', currentUserId);
+        formData.append('groupId', currentGroupId);
+
+        try {
+          const res = await fetch('/messages', {
+            method: 'POST',
+            body: formData
+          });
+
+          const result = await res.json();
+          if (!res.ok) {
+            alert(result.error || 'Upload failed');
+          }
+          document.getElementById('fileInput').value = '';
+        } catch (err) {
+          alert('Upload error. Try again.');
+          console.error(err);
+        }
+      } else if (text) {
+        socket.emit('chatMessage', {
+          text,
+          groupId: currentGroupId,
+          userId: currentUserId,
+          username: currentUsername
+        });
+      }
+
+      document.getElementById('msgInput').value = '';
+    };
+
+    // Add message to chat window
+    function addMessage(msg) {
+      const container = document.getElementById('messages');
+      const div = document.createElement('div');
+      div.className = 'message';
+      if (msg.userId === currentUserId) {
+        div.classList.add('self');
+      }
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const time = new Date(msg.createdAt || Date.now()).toLocaleTimeString();
+
+      // Use displayName or username for showing message sender
+      const senderName = msg.displayName || msg.username || 'User';
+      meta.textContent = `${senderName} [${time}]`;
+      div.appendChild(meta);
+
+      if (msg.text) {
+        const textNode = document.createElement('div');
+        textNode.textContent = msg.text;
+        div.appendChild(textNode);
+      }
+
+      if (msg.media) {
+        const url = msg.media.startsWith('http') ? msg.media : serverBaseUrl + msg.media;
+        const ext = url.split('.').pop().toLowerCase();
+
+        if (['mp4', 'mov', 'avi', 'webm', 'ogg'].includes(ext)) {
+          const video = document.createElement('video');
+          video.src = url;
+          video.controls = true;
+          div.appendChild(video);
+        } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) {
+          const img = document.createElement('img');
+          img.src = url;
+          div.appendChild(img);
+        } else {
+          // Default to image if unknown extension
+          const img = document.createElement('img');
+          img.src = url;
+          div.appendChild(img);
+        }
+      }
+
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+    }
+  </script>
+</body>
+</html>
+  
